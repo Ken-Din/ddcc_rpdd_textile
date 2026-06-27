@@ -1,10 +1,11 @@
 """
-Step 7 — Computational Consistency Tests
+Step 7 - Computational Consistency Tests
 Tests that empirically verify behavior predicted by Theorems 1-4.
 These are consistency checks, NOT mathematical proofs.
 """
+
 import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import numpy as np
 import pandas as pd
@@ -12,164 +13,182 @@ from data.data_generator import generate_data
 from model.utility import compute_utility
 from model.feasibility import compute_feasibility
 from model.optimization import solve
+from model.config import BASE_CAPACITIES as BASE_CAP
+
 
 def test_theorem1_disposal_consistency():
+    """
+    Consistency check for Theorem 1 (Disposal Elimination Property).
+    Theorem 1 states: yiD=1 iff max{uij : j in P, Fij=1} <= 0 (with epsilon tie-breaking).
+    Under A7-relaxed (shared capacity), disposal may also occur when all
+    positive-utility positions are at full capacity — this is expected behavior,
+    not a violation. This test distinguishes the two cases.
+    """
     print("\n[T1] Disposal Elimination consistency check...")
     df = generate_data(I=100, seed=42)
-    U, P = compute_utility(df, w1=0.7, w2=0.3, epsilon=0.01)
+    U, P = compute_utility(df, w1=0.7, w2=0.3)
     F = compute_feasibility(df)
     result = solve(U, F, I=100, epsilon=0.01)
     assignments = result['assignments']
     position_names = result['position_names']
-    disposal_idx = len(P)
+    disposal_idx = len(P) - 1
     epsilon = 0.01
 
     # Get actual capacity usage
     capacity_usage = {}
     for j, pos in enumerate(P):
-        capacity_usage[pos] = sum(1 for i in range(100) if assignments[i] == j)
+        capacity_usage[pos] = sum(1 for a in assignments if a == j)
 
-    BASE_CAP = {"Resale":100,"Repair":8,"Refurbishing":6,
-                "Repackaging":100,"Recycling":4,"Donation":5,"DiscountSale":100}
-
-    disposal_units = [i for i in range(100) if assignments[i] == disposal_idx]
-    print(f"    Units assigned to Disposal: {len(disposal_units)}")
+    BASE_CAP_SCALED = {k: max(1, int(v * 100/100)) for k, v in BASE_CAP.items()}
 
     violations = 0
     capacity_constrained = 0
+    utility_dominated = 0
 
-    for i in disposal_units:
-        feasible_positive = [
-            j for j in range(len(P))
-            if F[i, j] == 1 and (U[i, j] - epsilon) > 0
-        ]
-        if feasible_positive:
-            # Check if all these positions are at capacity
-            all_at_capacity = all(
-                capacity_usage.get(P[j], 0) >= BASE_CAP.get(P[j], 100)
-                for j in feasible_positive
-            )
-            if all_at_capacity:
-                capacity_constrained += 1
-                print(f"    unit {i}: Disposal due to binding capacity constraints "
-                      f"(expected A7-relaxed behavior)")
+    for i, a in enumerate(assignments):
+        if a == disposal_idx:
+            feasible_utils = [U[i, j] for j in range(len(P)-1) if F[i, j] == 1]
+            if not feasible_utils or max(feasible_utils) <= epsilon:
+                utility_dominated += 1
             else:
-                violations += 1
-                print(f"    VIOLATION: unit {i} sent to Disposal but "
-                      f"{[P[j] for j in feasible_positive]} not at capacity")
+                pos_names = list(BASE_CAP_SCALED.keys())
+                all_full = all(
+                    capacity_usage.get(pos_names[j], 0) >= BASE_CAP_SCALED.get(pos_names[j], 999)
+                    for j in range(len(P)-1)
+                    if F[i, j] == 1 and U[i, j] > epsilon
+                )
+                if all_full:
+                    capacity_constrained += 1
+                else:
+                    violations += 1
 
-    if violations == 0:
-        print(f"    PASS: All {len(disposal_units)} disposal units correctly explained.")
-        print(f"    {capacity_constrained} units: capacity-constrained (A7 relaxed)")
-    else:
-        print(f"    FAIL: {violations} unexplained disposal assignments.")
-    return violations == 0
+    print(f"  Disposal units: {sum(1 for a in assignments if a == disposal_idx)}")
+    print(f"  Utility-dominated: {utility_dominated}")
+    print(f"  Capacity-constrained: {capacity_constrained}")
+    print(f"  Unexplained violations: {violations}")
+    assert violations == 0, f"T1 FAIL: {violations} unexplained disposal assignments"
+    print("  T1 PASS")
 
 
 def test_theorem2_information_loss():
-    print("\n[T2] Information Loss consistency check...")
-    df_full = generate_data(I=100, seed=42)
-    U_full, P = compute_utility(df_full, w1=0.7, w2=0.3)
-    F_full = compute_feasibility(df_full)
-    result_full = solve(U_full, F_full, I=100)
+    """
+    Consistency check for Theorem 2 (Structural Information Irrecoverability)
+    and Corollary 2.1 (Decision Loss Potential).
+    Theorem 2 states: information lost at RSS cannot be recovered downstream.
+    This test simulates RSS incompleteness by masking the 'condition' attribute
+    for 30% of units (replacing true condition with a default value).
+    The masked model is then evaluated using TRUE (full-information) utility,
+    showing that information loss causes measurable assignment changes and
+    utility reduction — consistent with Corollary 2.1.
+    NOTE: This is an empirical consistency check, not a formal proof of
+    irrecoverability. The formal proof is in the paper (Step 9, Theorem 2).
+    """
+    print("\n[T2] Information loss consistency check...")
+    df = generate_data(I=1000, seed=42)
 
-    # Mask condition: replace with 'Unknown' mapped to neutral values
-    # Simulate RSS incompleteness — use most common condition as default
-    df_masked = df_full.copy()
-    mask_idx = df_masked.sample(frac=0.3, random_state=42).index
-    # Use NotLiked as default (most conservative, doesn't artificially inflate utility)
-    df_masked.loc[mask_idx, 'condition'] = 'NotLiked'
+    # Full information
+    U_full, P = compute_utility(df, w1=0.7, w2=0.3)
+    F_full = compute_feasibility(df)
+    result_full = solve(U_full, F_full, I=1000, epsilon=0.01)
+
+    # Masked: 30% of units have condition replaced with 'fair'
+    df_masked = df.copy()
+    rng = np.random.default_rng(42)
+    mask_idx = rng.choice(len(df), size=int(0.3 * len(df)), replace=False)
+    df_masked.loc[mask_idx, 'condition'] = 'Stained'
 
     U_masked, _ = compute_utility(df_masked, w1=0.7, w2=0.3)
     F_masked = compute_feasibility(df_masked)
-    result_masked = solve(U_masked, F_masked, I=100)
+    result_masked = solve(U_masked, F_masked, I=1000, epsilon=0.01)
 
-    utility_full = result_full['total_utility']
-    utility_masked = result_masked['total_utility']
-    changed = np.sum(result_full['assignments'] != result_masked['assignments'])
+    # Evaluate masked assignments using TRUE utility
+    true_utility_of_masked = sum(
+        U_full[i, a] if a < len(P) - 1 else 0.0
+        for i, a in enumerate(result_masked['assignments'])
+    )
 
-    # Compute TRUE utility of masked solution using full information
-    true_utility_of_masked = 0.0
-    for i in range(100):
-        j = result_masked['assignments'][i]
-        if j < len(P):
-            true_utility_of_masked += U_full[i, j]
+    utility_loss = result_full['total_utility'] - true_utility_of_masked
+    changed = sum(
+        1 for a, b in zip(result_full['assignments'], result_masked['assignments'])
+        if a != b
+    )
 
-    print(f"    Full information utility:           {utility_full:.4f}")
-    print(f"    Masked solution (self-reported):    {utility_masked:.4f}")
-    print(f"    Masked solution (TRUE utility):     {true_utility_of_masked:.4f}")
-    print(f"    TRUE utility loss vs full info:     "
-          f"{utility_full - true_utility_of_masked:.4f}")
-    print(f"    Assignment changes: {changed}/100 units")
+    print(f"  Full-info utility:          {result_full['total_utility']:.2f}")
+    print(f"  Masked (true eval) utility: {true_utility_of_masked:.2f}")
+    print(f"  Utility loss:               {utility_loss:.2f}")
+    print(f"  Assignment changes:         {changed}/1000")
 
-    passed = utility_full >= true_utility_of_masked and changed > 0
-    print(f"    {'PASS' if passed else 'FAIL'}: "
-          f"Full-information model achieves {'higher' if utility_full > true_utility_of_masked else 'equal'} "
-          f"TRUE utility than information-loss model.")
-    return passed
+    assert utility_loss > 0, "T2 FAIL: information loss caused no utility reduction"
+    assert changed > 0, "T2 FAIL: information loss caused no assignment changes"
+    print("  T2 PASS")
+
 
 def test_theorem3_utility_loss():
-    print("\n[T3] Execution-Layer Utility Loss (Delta_i) consistency check...")
+    """
+    Consistency check for Theorem 3 (Execution-Layer Utility Loss Identifiability).
+    Theorem 3 states: Delta_i = max{uij : j in P} - u_{i,ri*} is computable
+    from the recorded (U, F) profile alone, without external information.
+    This test computes Delta_i for all units and verifies it is non-negative
+    and identifiable directly from model outputs.
+    """
+    print("\n[T3] Utility loss identifiability check...")
     df = generate_data(I=100, seed=42)
     U, P = compute_utility(df, w1=0.7, w2=0.3)
     F = compute_feasibility(df)
-    result = solve(U, F, I=100)
+    result = solve(U, F, I=100, epsilon=0.01)
     assignments = result['assignments']
-    disposal_idx = len(P)
+
     deltas = []
-    for i in range(100):
-        if assignments[i] < disposal_idx:
-            assigned_utility = U[i, assignments[i]]
-            max_feasible_utility = max(
-                [U[i, j] for j in range(len(P)) if F[i, j] == 1],
-                default=0.0
-            )
-            delta_i = max_feasible_utility - assigned_utility
-            deltas.append(delta_i)
-        else:
-            deltas.append(0.0)
-    deltas = np.array(deltas)
-    units_with_loss = np.sum(deltas > 0.001)
-    print(f"    Units with Delta_i > 0: {units_with_loss}")
-    print(f"    Max Delta_i: {deltas.max():.4f}")
-    if units_with_loss > 0:
-        print(f"    Mean Delta_i (affected): {deltas[deltas>0.001].mean():.4f}")
-    print(f"    PASS: Delta_i computed from (U,F) profile for all 100 units.")
-    return True
+    for i, a in enumerate(assignments):
+        max_feasible = max(
+            (U[i, j] for j in range(len(P)-1) if F[i, j] == 1),
+            default=0.0
+        )
+        actual_utility = U[i, a] if a < len(P) - 1 else 0.0
+        delta_i = max_feasible - actual_utility
+        deltas.append(delta_i)
+        assert delta_i >= -1e-9, f"T3 FAIL: negative Delta_i={delta_i:.4f} at unit {i}"
+
+    print(f"  Delta_i computed for all {len(deltas)} units")
+    print(f"  Mean Delta_i: {np.mean(deltas):.4f}")
+    print(f"  Max Delta_i:  {np.max(deltas):.4f}")
+    print("  T3 PASS")
+
 
 def test_theorem4_scalability():
-    print("\n[T4] Empirical Runtime Growth Analysis...")
+    """
+    Consistency check for Theorem 4 (Complexity Boundary).
+    Theorem 4 states: under uniform capacity consumption (kij=1), the
+    assignment problem is solvable in polynomial time via min-cost flow.
+    This test measures empirical runtime at I=100, 1000, 10000 and reports
+    growth ratios. Sub-linear growth relative to I confirms practical
+    tractability.
+    NOTE: This is empirical runtime observation, not a polynomial proof.
+    The formal proof is in the paper (Step 9, Theorem 4).
+    """
     import time
-    sizes = [100, 1000, 10000]
-    times = []
-    for I in sizes:
+    print("\n[T4] Scalability (Theorem 4 complexity boundary)...")
+    times = {}
+    for I in [100, 1000, 10000]:
         df = generate_data(I=I, seed=42)
         U, P = compute_utility(df, w1=0.7, w2=0.3)
         F = compute_feasibility(df)
         t0 = time.time()
-        result = solve(U, F, I=I, scale_capacities=True)
-        elapsed = time.time() - t0
-        times.append(elapsed)
-        print(f"    I={I:6d}: utility={result['total_utility']:10.2f}, "
-              f"time={elapsed:.4f}s")
-    if len(times) == 3 and times[0] > 0:
-        print(f"    Time ratio (1000/100):   {times[1]/times[0]:.1f}x")
-        print(f"    Time ratio (10000/1000): {times[2]/times[1]:.1f}x")
-        print(f"    NOTE: Empirical observation only, not a polynomial proof.")
-    return True
+        solve(U, F, I=I, epsilon=0.01)
+        times[I] = time.time() - t0
+        print(f"  I={I:6d}: {times[I]:.3f}s")
+
+    ratio_10 = times[1000] / times[100]
+    ratio_100 = times[10000] / times[1000]
+    print(f"  Growth ratio 100→1000:   {ratio_10:.1f}x")
+    print(f"  Growth ratio 1000→10000: {ratio_100:.1f}x")
+    assert ratio_100 < 50, f"T4 FAIL: super-linear growth ({ratio_100:.1f}x)"
+    print("  T4 PASS")
+
 
 if __name__ == "__main__":
-    print("=" * 60)
-    print("COMPUTATIONAL CONSISTENCY TESTS")
-    print("=" * 60)
-    results = {
-        "T1 Disposal Elimination": test_theorem1_disposal_consistency(),
-        "T2 Information Loss":     test_theorem2_information_loss(),
-        "T3 Utility Loss Delta_i": test_theorem3_utility_loss(),
-        "T4 Runtime Growth":       test_theorem4_scalability(),
-    }
-    print("\n" + "=" * 60)
-    print("SUMMARY")
-    print("=" * 60)
-    for name, passed in results.items():
-        print(f"  {name}: {'PASS' if passed else 'FAIL'}")
+    test_theorem1_disposal_consistency()
+    test_theorem2_information_loss()
+    test_theorem3_utility_loss()
+    test_theorem4_scalability()
+    print("\n=== All consistency checks passed ===")

@@ -1,75 +1,113 @@
 """
-DDCC/RPDD Textile Return Optimization — Main Pipeline
-I=100, seed=42
+Main pipeline for the DDCC/RPDD textile return optimization.
+
+Runs the full RUS-CEDE optimization layer:
+    1. Generate synthetic return data
+    2. Compute utility matrix (RUS)
+    3. Compute feasibility matrix
+    4. Solve min-cost flow assignment (CEDE)
+    5. Report results
 """
-import time
-import pandas as pd
-import numpy as np
+
 import sys
 import os
+import numpy as np
+import pandas as pd
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(__file__))
 
 from data.data_generator import generate_data
 from model.utility import compute_utility
-from model.feasibility import compute_feasibility, feasibility_summary
-from model.optimization import solve, results_summary
+from model.feasibility import compute_feasibility
+from model.optimization import solve
+from model.config import POSITIONS, DISPOSAL, DEFAULT_W1, DEFAULT_W2, DEFAULT_EPSILON
+POSITION_NAMES = POSITIONS + [DISPOSAL]
 
-def main(I=100, seed=42, w1=0.7, w2=0.3, epsilon=0.01):
-    print("=" * 60)
-    print("DDCC/RPDD TEXTILE RETURN OPTIMIZATION")
-    print(f"I={I}, seed={seed}, w1={w1}, w2={w2}, epsilon={epsilon}")
-    print("=" * 60)
 
-    # STEP 1: Generate data
-    print("\n[1] Generating synthetic data...")
+def run_pipeline(I: int = 100, seed: int = 42, w1: float = DEFAULT_W1,
+                 w2: float = DEFAULT_W2, epsilon: float = DEFAULT_EPSILON,
+                 scale_capacities: bool = True) -> dict:
+    """
+    Run the full RUS-CEDE optimization pipeline.
+
+    Parameters
+    ----------
+    I : int
+        Number of return units.
+    seed : int
+        Random seed for reproducibility.
+    w1 : float
+        Weight for residual value in utility function.
+    w2 : float
+        Weight for recovery cost in utility function.
+    epsilon : float
+        Tie-breaking penalty for disposal edges.
+    scale_capacities : bool
+        If True, scale capacities proportionally with I.
+
+    Returns
+    -------
+    dict with pipeline results.
+    """
+    print(f"\n{'='*55}")
+    print(f"  DDCC/RPDD Textile Return Optimization")
+    print(f"  I={I}, seed={seed}, w1={w1}, w2={w2}")
+    print(f"{'='*55}")
+
+    # Step 1: Generate data
     df = generate_data(I=I, seed=seed)
-    print(f"    Generated {len(df)} units")
-    print(f"    Source distribution:\n{df['source'].value_counts()}")
-    print(f"    Condition distribution:\n{df['condition'].value_counts()}")
+    print(f"\n[1] Generated {I} return units")
+    print(f"    Conditions: {df['condition'].value_counts().to_dict()}")
 
-    # STEP 2: Compute utility matrix
-    print("\n[2] Computing utility matrix...")
-    U, P = compute_utility(df, w1=w1, w2=w2, epsilon=epsilon)
-    print(f"    U shape: {U.shape}")
-    print(f"    Positions: {P}")
-    print(f"    U stats: min={U.min():.2f}, max={U.max():.2f}, mean={U.mean():.2f}")
+    # Step 2: Compute utility
+    U, P = compute_utility(df, w1=w1, w2=w2)
+    print(f"\n[2] Utility matrix computed: shape {U.shape}")
+    print(f"    Mean utility: {U.mean():.4f}, Std: {U.std():.4f}")
 
-    # STEP 3: Compute feasibility matrix
-    print("\n[3] Computing feasibility matrix...")
+    # Step 3: Compute feasibility
     F = compute_feasibility(df)
-    print(f"    F shape: {F.shape}")
-    feasibility_summary(F, df)
+    print(f"\n[3] Feasibility matrix computed: shape {F.shape}")
+    print(f"    Feasible pairs: {F.sum()} / {F.size}")
 
-    # STEP 4: Solve optimization
-    print("\n[4] Solving min-cost flow assignment...")
-    result = solve(U, F, I=I, epsilon=epsilon, scale_capacities=True)
-    print(f"    Solve time: {result['solve_time']:.4f}s")
-    print(f"    Total utility: {result['total_utility']:.4f}")
-    print(f"    Binding constraints: {result['binding_constraints']}")
-
-    # STEP 5: Results summary
-    print("\n[5] Assignment results:")
-    results_summary(result, df)
-
-    # STEP 6: Save results
-    print("\n[6] Saving results...")
+    # Step 4: Solve
+    result = solve(U, F, I=I, epsilon=epsilon,
+                   scale_capacities=scale_capacities)
     assignments = result['assignments']
+    total_utility = result['total_utility']
+    solver = result.get('solver', 'unknown')
+    print(f"\n[4] Optimization solved via {solver}")
+    print(f"    Total utility: {total_utility:.2f}")
+
+    # Step 5: Report
     position_names = result['position_names']
-    df['assigned_position'] = [position_names[a] for a in assignments]
-    df['utility_score'] = [U[i, assignments[i]] 
-                           if assignments[i] < len(P) else 0.0 
-                           for i in range(I)]
+    counts = {name: 0 for name in position_names}
+    for a in assignments:
+        counts[position_names[a]] += 1
 
-    os.makedirs('results', exist_ok=True)
-    output_path = 'results/main_results.csv'
-    df.to_csv(output_path, index=False)
-    print(f"    Saved to {output_path}")
+    print(f"\n[5] Assignment summary:")
+    for pos, cnt in counts.items():
+        print(f"    {pos:<15}: {cnt:4d} units")
 
-    print("\n" + "=" * 60)
-    print("PIPELINE COMPLETE")
-    print("=" * 60)
-    return df, result
+    from model.config import BASE_CAPACITIES
+    scale = (I / 100) if scale_capacities else 1.0
+    binding = [
+        pos for pos in BASE_CAPACITIES
+        if counts.get(pos, 0) >= max(1, int(BASE_CAPACITIES[pos] * scale))
+        and BASE_CAPACITIES[pos] < I
+    ]
+    print(f"\n    Binding constraints: {binding}")
+    print(f"    Disposal units:      {counts.get('Disposal', 0)}")
+
+    return {
+        'df': df,
+        'U': U,
+        'F': F,
+        'assignments': assignments,
+        'total_utility': total_utility,
+        'counts': counts,
+        'solver': solver,
+    }
+
 
 if __name__ == "__main__":
-    main()
+    run_pipeline(I=100, seed=42)
