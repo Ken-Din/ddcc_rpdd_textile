@@ -56,3 +56,9 @@ compatible with the theoretical framework without altering Theorems 1-4.
 - Binding: Repair, Refurbishing, Recycling, Donation
 - Disposal: 3 units (capacity-constrained)
 - Consistency tests: 4/4 PASS
+
+## Citation
+If you use this code, please cite:
+
+Dinç, K. (2026). DDCC/RPDD Textile Return Optimization (v1.0.0). Zenodo.
+https://doi.org/10.5281/zenodo.20966840
