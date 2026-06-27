@@ -1,5 +1,5 @@
 """
-Adım 7 — Computational Consistency Tests
+Step 7 — Computational Consistency Tests
 Tests that empirically verify behavior predicted by Theorems 1-4.
 These are consistency checks, NOT mathematical proofs.
 """
