@@ -3,7 +3,7 @@
 import numpy as np
 import pandas as pd
 
-from model.utility import P
+from model.config import POSITIONS as P
 
 CONDITIONS = [
     "NotLiked",
