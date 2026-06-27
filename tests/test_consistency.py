@@ -31,7 +31,7 @@ def test_theorem1_disposal_consistency():
     result = solve(U, F, I=100, epsilon=0.01)
     assignments = result['assignments']
     position_names = result['position_names']
-    disposal_idx = len(P) - 1
+    disposal_idx = len(P)
     epsilon = 0.01
 
     # Get actual capacity usage
