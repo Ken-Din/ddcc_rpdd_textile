@@ -98,6 +98,22 @@ def run_pipeline(I: int = 100, seed: int = 42, w1: float = DEFAULT_W1,
     print(f"\n    Binding constraints: {binding}")
     print(f"    Disposal units:      {counts.get('Disposal', 0)}")
 
+    import json
+    summary = {
+        "I": I,
+        "seed": seed,
+        "total_utility": result['total_utility'],
+        "binding_constraints": result.get('binding_constraints', []),
+        "solver": result.get('solver', 'unknown'),
+        "solve_time": round(result.get('solve_time', 0), 4),
+        "status": result.get('status', 'unknown'),
+        "disposal_count": counts.get('Disposal', 0),
+    }
+    os.makedirs('results', exist_ok=True)
+    with open('results/run_summary.json', 'w') as f:
+        json.dump(summary, f, indent=2)
+    print(f"\n    Run summary saved to results/run_summary.json")
+    
     return {
         'df': df,
         'U': U,

@@ -1,4 +1,13 @@
-"""Feasibility matrix for textile return positions."""
+"""
+Feasibility matrix for textile return positions.
+
+Scope limitation: feasibility is determined by product condition only.
+In the full DDCC/RPDD theoretical framework, institutional constraints (Omega)
+also include age-based restrictions, regulatory requirements, channel
+availability (Aij), and capacity (Kij). For the textile case study,
+condition-based rules are sufficient and consistent with the paper's
+numerical example scope.
+"""
 
 import numpy as np
 import pandas as pd

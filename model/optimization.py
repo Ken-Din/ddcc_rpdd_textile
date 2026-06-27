@@ -8,6 +8,7 @@ Under uniform capacity consumption (kij=1), the assignment problem is
 solvable in polynomial time via min-cost flow (Theorem 4).
 """
 
+import time
 import numpy as np
 
 from model.config import (
@@ -25,39 +26,13 @@ def solve(
     epsilon: float = 0.01,
     scale_capacities: bool = True,
 ) -> dict:
-    """
-    Solve the min-cost flow assignment problem.
-
-    Parameters
-    ----------
-    U : np.ndarray, shape (I, |P|)
-        Utility matrix from compute_utility().
-    F : np.ndarray, shape (I, |P|)
-        Feasibility matrix from compute_feasibility().
-    I : int
-        Number of return units.
-    epsilon : float
-        Tie-breaking penalty added to disposal edge cost.
-    scale_capacities : bool
-        If True, scale BASE_CAPACITIES by I/100.
-
-    Returns
-    -------
-    dict with keys:
-        assignments      : list[int], length I — position index per unit
-        position_names   : list[str]
-        total_utility    : float
-        solver           : str — 'ortools' or 'networkx'
-    """
     scale = (I / 100) if scale_capacities else 1.0
     capacities = {pos: max(1, int(BASE_CAPACITIES[pos] * scale)) for pos in P}
 
     try:
         result = _solve_ortools(U, F, I, epsilon, capacities)
-        result["solver"] = "ortools"
     except Exception:
         result = _solve_networkx(U, F, I, epsilon, capacities)
-        result["solver"] = "networkx"
 
     return result
 
@@ -68,24 +43,15 @@ def _solve_ortools(U, F, I, epsilon, capacities):
     mcf = min_cost_flow.SimpleMinCostFlow()
 
     n_positions = len(P)
-    # Node layout:
-    # 0         : source
-    # 1..I      : unit nodes
-    # I+1..I+|P|: position nodes
-    # I+|P|+1  : disposal node
-    # I+|P|+2  : sink
-
     source = 0
     unit_nodes = list(range(1, I + 1))
     pos_nodes = list(range(I + 1, I + n_positions + 1))
     disposal_node = I + n_positions + 1
     sink = I + n_positions + 2
 
-    # Source → each unit (supply=1)
     for i in range(I):
         mcf.add_arc_with_capacity_and_unit_cost(source, unit_nodes[i], 1, 0)
 
-    # Unit → position edges (feasible only)
     for i in range(I):
         for j in range(n_positions):
             if F[i, j] == 1:
@@ -93,26 +59,25 @@ def _solve_ortools(U, F, I, epsilon, capacities):
                 mcf.add_arc_with_capacity_and_unit_cost(
                     unit_nodes[i], pos_nodes[j], 1, cost
                 )
-        # Unit → disposal (always feasible, cost = epsilon)
         disposal_cost = int(epsilon * COST_SCALE)
         mcf.add_arc_with_capacity_and_unit_cost(
             unit_nodes[i], disposal_node, 1, disposal_cost
         )
 
-    # Position → sink (capacity-constrained)
     for j, pos in enumerate(P):
         mcf.add_arc_with_capacity_and_unit_cost(
             pos_nodes[j], sink, capacities[pos], 0
         )
 
-    # Disposal → sink (unlimited)
     mcf.add_arc_with_capacity_and_unit_cost(disposal_node, sink, I, 0)
 
-    # Supply/demand
     mcf.set_node_supply(source, I)
     mcf.set_node_supply(sink, -I)
 
+    t0 = time.perf_counter()
     status = mcf.solve()
+    elapsed = time.perf_counter() - t0
+
     if status != mcf.OPTIMAL:
         raise RuntimeError(f"OR-Tools status: {status}")
 
@@ -126,16 +91,25 @@ def _solve_ortools(U, F, I, epsilon, capacities):
             if tail in unit_nodes:
                 i = tail - 1
                 if head == disposal_node:
-                    assignments[i] = len(P)  # disposal index
+                    assignments[i] = len(P)
                 elif head in pos_nodes:
                     j = head - (I + 1)
                     assignments[i] = j
                     total_utility += U[i, j]
 
+    binding = [
+        P[j] for j in range(len(P))
+        if sum(1 for a in assignments if a == j) >= capacities[P[j]]
+    ]
+
     return {
         "assignments": assignments,
         "position_names": POSITION_NAMES,
         "total_utility": total_utility,
+        "binding_constraints": binding,
+        "solver": "ortools",
+        "solve_time": elapsed,
+        "status": "optimal",
     }
 
 
@@ -174,7 +148,9 @@ def _solve_networkx(U, F, I, epsilon, capacities):
     G.add_node(disposal, demand=0)
     G.add_edge(disposal, sink, capacity=I, weight=0)
 
+    t0 = time.perf_counter()
     flow_dict = nx.min_cost_flow(G)
+    elapsed = time.perf_counter() - t0
 
     assignments = [None] * I
     total_utility = 0.0
@@ -190,8 +166,17 @@ def _solve_networkx(U, F, I, epsilon, capacities):
         if assignments[i] is None:
             assignments[i] = len(P)
 
+    binding = [
+        P[j] for j in range(len(P))
+        if sum(1 for a in assignments if a == j) >= capacities[P[j]]
+    ]
+
     return {
         "assignments": assignments,
         "position_names": POSITION_NAMES,
         "total_utility": total_utility,
+        "binding_constraints": binding,
+        "solver": "networkx",
+        "solve_time": elapsed,
+        "status": "optimal",
     }
