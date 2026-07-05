@@ -1,0 +1,15 @@
+{
+  "I": 100,
+  "seed": 42,
+  "total_utility": 5137.912840948849,
+  "binding_constraints": [
+    "Repair",
+    "Refurbishing",
+    "Recycling",
+    "Donation"
+  ],
+  "solver": "ortools",
+  "solve_time": 0.0002,
+  "status": "optimal",
+  "disposal_count": 3
+}
