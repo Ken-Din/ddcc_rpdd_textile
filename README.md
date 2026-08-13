@@ -24,6 +24,7 @@ python main.py
 python experiments/scalability.py
 python experiments/sensitivity.py
 python experiments/information_loss.py
+python experiments/external_benchmark.py
 
 ## Tests
 python tests/test_consistency.py

@@ -18,6 +18,7 @@ Usage: python experiments/external_benchmark.py
 
 import sys, os, time
 import numpy as np
+import pandas as pd
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -93,8 +94,27 @@ def main(I=1000, seed=42):
     print(f"TOPSIS heuristic:     utility={tot_h:.2f}  disposal={disp_h}  time={t_h:.3f}s")
     print(f"Gap: {gap:.2f} ({100*gap/opt:.2f}% below optimal)")
 
+    return {
+        "I": I,
+        "rpdd_utility": round(opt, 2),
+        "topsis_utility": round(tot_h, 2),
+        "gap": round(gap, 2),
+        "gap_pct": round(100 * gap / opt, 2),
+        "rpdd_disposal": disp_o,
+        "topsis_disposal": disp_h,
+        "rpdd_time_s": round(t_opt, 3),
+        "topsis_time_s": round(t_h, 3),
+    }
+
 
 if __name__ == "__main__":
+    records = []
     for I in (100, 1000, 10000):
-        main(I=I)
+        records.append(main(I=I))
         print("-" * 50)
+
+    results_dir = os.path.join(os.path.dirname(__file__), "..", "results")
+    os.makedirs(results_dir, exist_ok=True)
+    out_path = os.path.join(results_dir, "external_benchmark.csv")
+    pd.DataFrame(records).to_csv(out_path, index=False)
+    print("Saved to results/external_benchmark.csv")
