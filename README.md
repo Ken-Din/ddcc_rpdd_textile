@@ -61,5 +61,4 @@ compatible with the theoretical framework without altering Theorems 1-4.
 ## Citation
 If you use this code, please cite:
 
-Dinç, K. (2026). DDCC/RPDD Textile Return Optimization (v1.0.0). Zenodo.
-https://doi.org/10.5281/zenodo.20966840
+Dinç, K. (2026). DDCC/RPDD Textile Return Optimization (v1.2.0). Zenodo. https://doi.org/10.5281/zenodo.20966839
